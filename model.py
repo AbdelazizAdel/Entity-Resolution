@@ -63,32 +63,36 @@ class HierMatcher(nn.Module):
         nn.init.xavier_uniform_(empty_attr_res, gain=nn.init.calculate_gain('relu'))
         self.empty_attr_res = nn.Parameter(empty_attr_res, requires_grad=True)
     
-    # abs diff between left entity token and all tokens in right entity
-    def element_wise_compare(self, vector, matrix):
-        compare_matrix = torch.abs(vector - matrix) # shape(n, 768)
-        return compare_matrix
+    # abs diff between left entity tokens and right entity tokens
+    def element_wise_compare(self, left, right):
+        left = left.reshape(left.size(0), 1, -1)
+        compare_matrix = torch.abs(left - right)
+        return compare_matrix # shape(n_tokens_left, n_tokens_right, 768)
     
     # get the the weight of left entity token wrt each token in right entity
     def get_token_weights(self, compare_matrix):
-        highway_out = self.highway_token_matching(compare_matrix) # shape(n, 768)
-        weight_vector = F.softmax(self.linear_token_matching(highway_out), dim=0) # shape(n, 1)
-        return weight_vector
+        highway_out = self.highway_token_matching(compare_matrix) # shape(n_tokens_left, n_tokens_right, 768)
+        weight_vector = F.softmax(self.linear_token_matching(highway_out), dim=1)
+        return weight_vector # shape(n_tokens_left, n_tokens_right, 1)
     
     # get the token in the right entity that is most similar to left entity token
-    def get_max(self, weight_vector, compare_matrix):
-        idx = torch.argmax(weight_vector)
-        return compare_matrix[idx,:] # shape(1, 768)
+    def get_max(self, weight_matrix, compare_matrix):
+        size = weight_matrix.shape
+        indicies = torch.argmax(weight_matrix, dim=1).flatten()
+        # print(f"indicies: {indicies.shape}")
+        return compare_matrix[range(size[0]),indicies] # shape(n_tokens_left, 768)
     
     # token matching layer
     def token_matching(self, left_embeddings, right_embeddings):
-        res= []
-        for i in range(left_embeddings.size(0)):
-            compare_matrix = self.element_wise_compare(left_embeddings[i,:], right_embeddings)
-            weight_vector = self.get_token_weights(compare_matrix)
-            res_vector = self.get_max(weight_vector, compare_matrix)
-            res.append(res_vector.flatten())
-        res = torch.stack(res) # shape(n, 768)
-        return res
+        # print(f"left_mbeddings: {left_embeddings.shape}")
+        # print(f"right_embeddings: {right_embeddings.shape}")
+        compare_matrix = self.element_wise_compare(left_embeddings, right_embeddings)
+        # print(f"compare_matrix: {compare_matrix.shape}")
+        weight_matrix = self.get_token_weights(compare_matrix)
+        # print(f"weight_matrix: {weight_matrix.shape}")
+        res_matrix = self.get_max(weight_matrix, compare_matrix)
+        # print(f"res_matrix: {res_matrix.shape}")
+        return res_matrix
     
     # attribute matching layer
     def attribute_matching(self, token_embeddings, field_embeddings, compare_result, n_attr, n_tokens):
