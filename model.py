@@ -1,14 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import BertModel
-from sklearn.metrics import precision_score, recall_score, f1_score
 from torch.utils.data import DataLoader
+from sklearn.metrics import precision_score, recall_score, f1_score
 import Dataset as ds
-import time
-
-bert = BertModel.from_pretrained('bert-base-uncased') # pretrained transformer used to obtain embeddings (BERT in this case)
-
 
 class HighwayNet(nn.Module):
 
@@ -79,19 +74,13 @@ class HierMatcher(nn.Module):
     def get_max(self, weight_matrix, compare_matrix):
         size = weight_matrix.shape
         indicies = torch.argmax(weight_matrix, dim=1).flatten()
-        # print(f"indicies: {indicies.shape}")
-        return compare_matrix[range(size[0]),indicies] # shape(n_tokens_left, 768)
+        return compare_matrix[range(size[0]), indicies] # shape(n_tokens_left, 768)
     
     # token matching layer
     def token_matching(self, left_embeddings, right_embeddings):
-        # print(f"left_mbeddings: {left_embeddings.shape}")
-        # print(f"right_embeddings: {right_embeddings.shape}")
         compare_matrix = self.element_wise_compare(left_embeddings, right_embeddings)
-        # print(f"compare_matrix: {compare_matrix.shape}")
         weight_matrix = self.get_token_weights(compare_matrix)
-        # print(f"weight_matrix: {weight_matrix.shape}")
         res_matrix = self.get_max(weight_matrix, compare_matrix)
-        # print(f"res_matrix: {res_matrix.shape}")
         return res_matrix
     
     # attribute matching layer
@@ -118,14 +107,29 @@ class HierMatcher(nn.Module):
         linear_out = self.linear_entity_matching(highway_out) # shape(1, 2)
         return F.softmax(linear_out, dim=1).flatten() # shape(2)
     
+    # gets left entity embeddings and right entity embeddings
+    #TODO: make it work for batch sizes greater than 1
+    def get_entity_tokens(self, x):
+        size, left, right = x['labels'].size(0), [], []
+        for i in range(size):
+            for v in x['left_fields'].values():
+                left.append(v[i])
+            for v in x['right_fields'].values():
+                right.append(v[i])
+        return torch.cat(left, dim=0), torch.cat(right, dim=0)
+    
+    def get_attr_lens(self, x):
+        size, left, right = x['labels'].size(0), [], []
+        for i in range(size):
+            for v in x['left_fields'].values():
+                left.append(v[i].size(0))
+            for v in x['right_fields'].values():
+                right.append(v[i].size(0))
+        return torch.tensor(left), torch.tensor(right)
+    
     def forward(self, x):
-        left_len =  x['left_len'][0]
-        right_len = x['right_len'][0]
-        left_attrs_len = x['left_attrs_len'][0]
-        right_attrs_len = x['right_attrs_len'][0]
-        with torch.no_grad():
-            left_embeddings = bert(**x['encoded_seq']).last_hidden_state[0][1:left_len+1]
-            right_embeddings = bert(**x['encoded_seq']).last_hidden_state[0][left_len+2:right_len+left_len+2]
+        left_embeddings, right_embeddings = self.get_entity_tokens(x)
+        left_attrs_len, right_attrs_len = self.get_attr_lens(x)
         left_compare_matrix = self.token_matching(left_embeddings, right_embeddings)
         right_compare_matrix = self.token_matching(right_embeddings, left_embeddings)
         left_entity_attributes_rep = self.attribute_matching(left_embeddings, self.attribute_embeddings_left, left_compare_matrix, self.nleft, left_attrs_len)
@@ -143,36 +147,30 @@ class HierMatcher(nn.Module):
                   loss=nn.BCELoss(),
                   optimizer=None,
                   scheduler=None):
-        
         if(optimizer == None):
             optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         if(scheduler == None):
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.1)
             
-        train_dataset = ds.ERDataset(train, self.nleft)
-        train_loader = DataLoader(train_dataset, batch_size=1, shuffle=True)
-        validation_dataset = ds.ERDataset(validation, self.nleft)
-        validation_loader = DataLoader(validation_dataset, batch_size=1, shuffle=False)
+        train_dataset = ds.ERDataset(train)
+        train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, collate_fn=ds.ERDataset.collate_fn)
         path = 'best_model.pt'
         
         num_steps = len(train_loader)
         cur_loss, best_f1 = 0.0, 0.0
         for epoch in range(num_epochs):
-            for num, (data, labels) in enumerate(train_loader):
-                start = time.time()
+            for num, data in enumerate(train_loader):
                 output = self(data)
-                end = time.time()
-                print(f"time: {end - start}")
-                l = loss(output[0].reshape(-1), labels.float())
+                l = loss(output[0].reshape(-1), data['labels'].float())
                 l.backward()
-                cur_loss+=l.item()
+                cur_loss+=l.detach().item()
                 if((num + 1) % batch_size == 0 or num + 1 == num_steps):
                     optimizer.step()
                     optimizer.zero_grad()
                 if (num + 1) % 100 == 0:
                     print(f'epoch: {epoch+1} / {num_epochs}, step: {num+1} / {num_steps}, loss: {(cur_loss / 100):.5f}')
                     cur_loss = 0
-            recall, precision, f1, val_loss = self.__run_validation(validation_loader)
+            recall, precision, f1, val_loss = self.run_eval(validation)
             if(f1 > best_f1):
                 best_f1 = f1
                 checkpoint = {
@@ -183,24 +181,23 @@ class HierMatcher(nn.Module):
                 torch.save(checkpoint, path)
             scheduler.step()
             
-            
-    # evaluates the model on validation set 
-    def __run_validation(self,
-                         validation,
-                         loss=nn.BCELoss()):
-        
+    # evaluates the model on a dataset
+    def run_eval(self,
+                path,
+                loss=nn.BCELoss()):
+        dataset = ds.ERDataset(path)
+        loader = DataLoader(dataset, shuffle=False)
+        print("evaluating model on validation set....")
+        Y_hat, Y, l = [], [], 0
         with torch.no_grad():
-            Y_hat, Y = [], []
-            l = 0
-            for data, labels in validation:
+            for data in loader:
                 output = self(data)
-                l += loss(output[0].reshape(-1), labels.float()).item()
+                l += loss(output[0].reshape(-1), data['labels'].float()).item()
                 Y_hat.append(round(output[0].item()))
-                Y.append(labels.item())
-            recall = recall_score(Y, Y_hat)
-            precision = precision_score(Y, Y_hat)
-            f1 = f1_score(Y, Y_hat)
-            
-        print(f"validation:\nrecall: {recall}, precision: {precision}, f1: {f1}, loss: {l / len(validation)}")
-        return recall, precision, f1, l / len(validation)
+                Y.append(data['labels'].item())
+        recall = recall_score(Y, Y_hat)
+        precision = precision_score(Y, Y_hat)
+        f1 = f1_score(Y, Y_hat)
+        print(f"validation:\nrecall: {recall}, precision: {precision}, f1: {f1}, loss: {l / len(loader)}")
+        return recall, precision, f1, l / len(loader)
         
