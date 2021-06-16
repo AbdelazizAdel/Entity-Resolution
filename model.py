@@ -23,8 +23,7 @@ class HighwayNet(nn.Module):
         gate_layer_result = self.gate_activation(self.gate_layer(x))
         multiplyed_gate_and_normal = torch.mul(normal_layer_result, gate_layer_result)
         multiplyed_gate_and_input = torch.mul((1 - gate_layer_result), x)
-        return torch.add(multiplyed_gate_and_normal,
-                         multiplyed_gate_and_input)
+        return torch.add(multiplyed_gate_and_normal, multiplyed_gate_and_input)
 
 
 class HierMatcher(nn.Module):
@@ -50,8 +49,9 @@ class HierMatcher(nn.Module):
         
         # layers in entity matching level
         input_size = (nleft + nright) * embedding_len
-        self.highway_entity_matching = HighwayNet(input_size) # highway network in entity matching layer
-        self.linear_entity_matching = nn.Linear(input_size, 2) # linear layer in entity matching level
+        output_size = (nleft + nright) * 200
+        self.linear1_entity_matching = nn.Linear(input_size, output_size) # first linear layer in entity matching level
+        self.linear2_entity_matching = nn.Linear(output_size, 2) # second linear layer in entity matching level
         
         # used as comparison result of attributes with empty value, learned during training
         empty_attr_res = torch.Tensor(1, self.embedding_len)
@@ -60,21 +60,24 @@ class HierMatcher(nn.Module):
     
     # abs diff between left entity tokens and right entity tokens
     def element_wise_compare(self, left, right):
-        left = left.reshape(left.size(0), 1, -1)
+        left = left.view(left.size(0), left.size(1), 1, -1)
+        right = right.view(right.size(0), 1, right.size(1), -1)
         compare_matrix = torch.abs(left - right)
-        return compare_matrix # shape(n_tokens_left, n_tokens_right, 768)
+        return compare_matrix # shape(batch_size, n_tokens_left, n_tokens_right, 768)
     
     # get the the weight of left entity token wrt each token in right entity
     def get_token_weights(self, compare_matrix):
-        highway_out = self.highway_token_matching(compare_matrix) # shape(n_tokens_left, n_tokens_right, 768)
-        weight_vector = F.softmax(self.linear_token_matching(highway_out), dim=1)
-        return weight_vector # shape(n_tokens_left, n_tokens_right, 1)
+        highway_out = self.highway_token_matching(compare_matrix) # shape(batch_size, n_tokens_left, n_tokens_right, 768)
+        weight_vector = F.softmax(self.linear_token_matching(highway_out), dim=2)
+        return weight_vector # shape(batch_size, n_tokens_left, n_tokens_right, 1)
     
     # get the token in the right entity that is most similar to left entity token
     def get_max(self, weight_matrix, compare_matrix):
         size = weight_matrix.shape
-        indicies = torch.argmax(weight_matrix, dim=1).flatten()
-        return compare_matrix[range(size[0]), indicies] # shape(n_tokens_left, 768)
+        dim1 = torch.arange(size[0]).view(-1,1)
+        dim2 = torch.arange(size[1])
+        dim3 = torch.argmax(weight_matrix, dim=2).squeeze()
+        return compare_matrix[dim1, dim2, dim3, :] # shape(batch_size, n_tokens_left, 768)
     
     # token matching layer
     def token_matching(self, left_embeddings, right_embeddings):
@@ -86,54 +89,40 @@ class HierMatcher(nn.Module):
     # attribute matching layer
     def attribute_matching(self, token_embeddings, field_embeddings, compare_result, n_attr, n_tokens):
         start, res = 0, []
-        for i in range(n_attr):
-            if(n_tokens[i].item() == 0):
-                res.append(self.empty_attr_res.flatten())
-                continue
-            tokens = token_embeddings[start:start+n_tokens[i]] # shape(n, 768)
-            field = field_embeddings(torch.tensor(i)).reshape(-1,1) # shape(768, 1)
-            weights = F.softmax(torch.matmul(tokens, field), dim=0) # shape(n, 1)
-            compare_matrix = compare_result[start:start+n_tokens[i]] # shape(n, 768)
-            sum = torch.sum(torch.mul(weights, compare_matrix), 0) # shape(768)
-            start+=n_tokens[i].item()
-            res.append(sum)
-        res = torch.stack(res) # shape(n, 768)
+        for i, v in enumerate(token_embeddings.values()):
+            field = field_embeddings(torch.tensor(i)).view(-1,1) # shape(768, 1)
+            weights = F.softmax(torch.matmul(v, field), dim=1) # shape(batch_size, n, 1)
+            compare_matrix = compare_result[:, start:start+v.size(1)] # shape(batch_size, n, 768)
+            summary = torch.sum(torch.mul(compare_matrix, weights), 1).view(v.size(0), 1, -1) # shape(batch_size, 1, 768)
+            start+=v.size(1)
+            res.append(summary)
+        res = torch.cat(res, dim=1) # shape(batch_size, n, 768)
         return res
     
     # entity matching layer
     def entity_matching(self, left, right):
-        concat = torch.cat((left, right), dim=0).reshape(1, -1) # shape(1, 768 * n)
-        highway_out = self.highway_entity_matching(concat) # shape(1, 768 * n)
-        linear_out = self.linear_entity_matching(highway_out) # shape(1, 2)
-        return F.softmax(linear_out, dim=1).flatten() # shape(2)
+        concat = torch.cat((left, right), dim=1).view(left.shape[0], -1) # shape(batch_size, (nleft + nright) * 768)
+        linear1_out = F.relu(self.linear1_entity_matching(concat)) # shape(batch_size, (nleft + nright) * 200)
+        linear2_out = self.linear2_entity_matching(linear1_out) # shape(batch_size, 2)
+        return linear2_out
     
     # gets left entity embeddings and right entity embeddings
-    #TODO: make it work for batch sizes greater than 1
     def get_entity_tokens(self, x):
-        size, left, right = x['labels'].size(0), [], []
-        for i in range(size):
-            for v in x['left_fields'].values():
-                left.append(v[i])
-            for v in x['right_fields'].values():
-                right.append(v[i])
-        return torch.cat(left, dim=0), torch.cat(right, dim=0)
-    
-    def get_attr_lens(self, x):
-        size, left, right = x['labels'].size(0), [], []
-        for i in range(size):
-            for v in x['left_fields'].values():
-                left.append(v[i].size(0))
-            for v in x['right_fields'].values():
-                right.append(v[i].size(0))
-        return torch.tensor(left), torch.tensor(right)
+        left, right = [], []
+        for key in ['left_fields', 'right_fields']:
+            for v in x[key].values():
+                if key == 'left_fields':
+                    left.append(v)
+                else:
+                    right.append(v)
+        return torch.cat(left, dim=1), torch.cat(right, dim=1)
     
     def forward(self, x):
         left_embeddings, right_embeddings = self.get_entity_tokens(x)
-        left_attrs_len, right_attrs_len = self.get_attr_lens(x)
         left_compare_matrix = self.token_matching(left_embeddings, right_embeddings)
         right_compare_matrix = self.token_matching(right_embeddings, left_embeddings)
-        left_entity_attributes_rep = self.attribute_matching(left_embeddings, self.attribute_embeddings_left, left_compare_matrix, self.nleft, left_attrs_len)
-        right_entity_attributes_rep = self.attribute_matching(right_embeddings, self.attribute_embeddings_right, right_compare_matrix, self.nright, right_attrs_len)
+        left_entity_attributes_rep = self.attribute_matching(x['left_fields'], self.attribute_embeddings_left, left_compare_matrix, self.nleft, x['left_length'])
+        right_entity_attributes_rep = self.attribute_matching(x['right_fields'], self.attribute_embeddings_right, right_compare_matrix, self.nright, x['right_length'])
         output = self.entity_matching(left_entity_attributes_rep, right_entity_attributes_rep)
         return output
     
@@ -142,39 +131,42 @@ class HierMatcher(nn.Module):
                   train, 
                   validation, 
                   num_epochs=40,
-                  batch_size=16,
-                  lr=0.001,
-                  loss=nn.BCELoss(),
+                  batch_size=8,
+                  lr=0.01,
+                  loss=None,
                   optimizer=None,
                   scheduler=None):
         if(optimizer == None):
             optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         if(scheduler == None):
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.1)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
+        if(loss == None):
+            loss = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 2]))
             
         train_dataset = ds.ERDataset(train)
-        train_loader = DataLoader(train_dataset, batch_size=2, shuffle=True, collate_fn=ds.ERDataset.collate_fn)
-        path = 'best_model.pt'
-        
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=ds.ERDataset.collate_fn)
         num_steps = len(train_loader)
-        cur_loss, best_f1 = 0.0, 0.0
+        path = 'best_model.pt'
+        best_f1 = 0.0
+        
         for epoch in range(num_epochs):
             for num, data in enumerate(train_loader):
                 output = self(data)
-                l = loss(output[0].reshape(-1), data['labels'].float())
+                l = loss(output, data['labels'])
                 l.backward()
-                cur_loss+=l.detach().item()
-                if((num + 1) % batch_size == 0 or num + 1 == num_steps):
-                    optimizer.step()
-                    optimizer.zero_grad()
-                if (num + 1) % 100 == 0:
-                    print(f'epoch: {epoch+1} / {num_epochs}, step: {num+1} / {num_steps}, loss: {(cur_loss / 100):.5f}')
-                    cur_loss = 0
+                optimizer.step()
+                optimizer.zero_grad()
+                if (num + 1) % 10 == 0:
+                    print(f'epoch: {epoch+1} / {num_epochs}, step: {num+1} / {num_steps}, loss: {l:.5f}')
             recall, precision, f1, val_loss = self.run_eval(validation)
             if(f1 > best_f1):
                 best_f1 = f1
                 checkpoint = {
                     'epoch': epoch,
+                    'recall': recall,
+                    'precision': precision,
+                    'f1': f1,
+                    'val_loss': val_loss,
                     'model_state': self.state_dict(),
                     'optim_state': optimizer.state_dict()
                 }
@@ -184,20 +176,19 @@ class HierMatcher(nn.Module):
     # evaluates the model on a dataset
     def run_eval(self,
                 path,
-                loss=nn.BCELoss()):
+                loss = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 2]))):
         dataset = ds.ERDataset(path)
-        loader = DataLoader(dataset, shuffle=False)
+        loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
         print("evaluating model on validation set....")
         Y_hat, Y, l = [], [], 0
         with torch.no_grad():
             for data in loader:
                 output = self(data)
-                l += loss(output[0].reshape(-1), data['labels'].float()).item()
-                Y_hat.append(round(output[0].item()))
+                l += loss(output, data['labels']).item()
+                Y_hat.append(torch.argmax(output).item())
                 Y.append(data['labels'].item())
         recall = recall_score(Y, Y_hat)
         precision = precision_score(Y, Y_hat)
         f1 = f1_score(Y, Y_hat)
         print(f"validation:\nrecall: {recall}, precision: {precision}, f1: {f1}, loss: {l / len(loader)}")
         return recall, precision, f1, l / len(loader)
-        
