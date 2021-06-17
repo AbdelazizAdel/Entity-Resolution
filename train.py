@@ -9,4 +9,4 @@ model = md.HierMatcher(5, 5, embedding_len=768)
 if(os.path.exists('./best_model.pt')):
     checkpoint = torch.load('./best_model.pt')
     model.load_state_dict(checkpoint['model_state'])
-model.run_train(train_path, valid_path, num_epochs=5, batch_size=8, lr=0.005)
+model.run_train(train_path, valid_path, num_epochs=5, batch_size=16, lr=0.01)

@@ -22,13 +22,16 @@ def get_data(fpath, nleft):
     with open(fpath) as csv_file:
         file = csv.reader(csv_file)
         data, labels, fields = [], [], []
+        neg_pos = [0, 0]
         for idx, row in enumerate(file):
             if(idx == 0):
                 fields = row[2:]
                 continue
-            labels.append(int(row[1]))
+            label = int(row[1])
+            labels.append(label)
+            neg_pos[label]+=1
             data.append((row[2:(2+nleft)], row[(2+nleft):]))
-    return data, labels, fields
+    return data, labels, fields, neg_pos
 
 '''
 Args:
@@ -58,8 +61,8 @@ def encode_data(data, fields, nleft):
         for field, span in right_spans.items():
             right_fields[field].append(encoded_seq[start:start+span])
             start+=span
-        if(i % 100 == 0):
-            print(f"example {i}/{len(data)}")
+        if((i + 1) % 100 == 0):
+            print(f"example {i + 1}/{len(data)}")
     return {'left_fields': left_fields, 'right_fields': right_fields}
 
 
@@ -67,9 +70,11 @@ def encode_data(data, fields, nleft):
 def preprocess(data_dir, nleft):
     for dataset in ['train', 'valid', 'test']:
         path = data_dir + dataset
-        data, labels, fields = get_data(path+".csv", nleft)
+        data, labels, fields, neg_pos = get_data(path+".csv", nleft)
         encoded_data = encode_data(data, fields, nleft)
         encoded_data['labels'] = labels
+        encoded_data['fields'] = fields
+        encoded_data['neg_pos'] = neg_pos
         torch.save(encoded_data, path+".pt")
 
 #loads pretrained embeddings from the provided path

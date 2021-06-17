@@ -48,5 +48,8 @@ class ERDataset(Dataset):
         for key in ['left_fields', 'right_fields']:
             for k, v in res[key].items():
                 res[key][k] = torch.nn.utils.rnn.pad_sequence(v, batch_first=True)
+                
         res['labels'] = torch.tensor(res['labels'])
+        res['left_length'] = torch.tensor(res['left_length'])
+        res['right_length'] = torch.tensor(res['right_length'])
         return res
