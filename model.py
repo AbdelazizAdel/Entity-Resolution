@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from sklearn.metrics import precision_score, recall_score, f1_score
 import Dataset as ds
+import focal_loss
 
 class HighwayNet(nn.Module):
 
@@ -90,6 +91,9 @@ class HierMatcher(nn.Module):
     def attribute_matching(self, token_embeddings, field_embeddings, compare_result, tokens_mask, attrs_mask):
         start, res = 0, []
         for i, v in enumerate(token_embeddings.values()):
+            if(v.size(1) == 0):
+                res.append(torch.zeros(v.size(0), 1, 768))
+                continue
             field = field_embeddings(torch.tensor(i)).view(-1,1) # shape(768, 1)
             mask = tokens_mask[:, start:start+v.size(1)].view(-1, v.size(1), 1)
             weights = self.masked_softmax(torch.matmul(v, field), mask, dim=1) # shape(batch_size, n, 1)
@@ -168,8 +172,7 @@ class HierMatcher(nn.Module):
         if(loss == None):
             neg_pos = train_dataset.data['neg_pos']
             neg_weight = 1 / (neg_pos[0] / neg_pos[1] + 1)
-            pos_weight = 1 - neg_weight
-            loss = nn.CrossEntropyLoss(weight=torch.FloatTensor([neg_weight, pos_weight]))
+            loss = focal_loss.FocalLoss(gamma=2, alpha=neg_weight)
             
         num_steps = len(train_loader)
         path = 'best_model.pt'
@@ -202,7 +205,7 @@ class HierMatcher(nn.Module):
     # evaluates the model on a dataset
     def run_eval(self,
                 path,
-                loss = nn.CrossEntropyLoss(weight=torch.FloatTensor([1, 2]))):
+                loss = None):
         dataset = ds.ERDataset(path)
         loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
         print("evaluating model on validation set....")
