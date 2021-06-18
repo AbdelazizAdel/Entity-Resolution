@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from sklearn.metrics import precision_score, recall_score, f1_score
 import Dataset as ds
-import focal_loss
+import utils
 
 class HighwayNet(nn.Module):
 
@@ -170,9 +170,9 @@ class HierMatcher(nn.Module):
         if(scheduler == None):
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
         if(loss == None):
-            neg_pos = train_dataset.data['neg_pos']
-            neg_weight = 1 / (neg_pos[0] / neg_pos[1] + 1)
-            loss = focal_loss.FocalLoss(gamma=2, alpha=neg_weight)
+            # neg_pos = train_dataset.data['neg_pos']
+            # neg_weight = 1 / (neg_pos[0] / neg_pos[1] + 1)
+            loss = utils.FocalLoss(gamma=2, alpha=0.25)
             
         num_steps = len(train_loader)
         path = 'best_model.pt'
@@ -187,7 +187,7 @@ class HierMatcher(nn.Module):
                 optimizer.zero_grad()
                 if (num + 1) % 10 == 0:
                     print(f'epoch: {epoch+1} / {num_epochs}, step: {num+1} / {num_steps}, loss: {l:.5f}')
-            recall, precision, f1, val_loss = self.run_eval(validation, loss)
+            recall, precision, f1, val_loss = self.run_eval(validation)
             if(f1 >= best_f1):
                 best_f1 = f1
                 checkpoint = {
@@ -203,11 +203,13 @@ class HierMatcher(nn.Module):
             scheduler.step()
             
     # evaluates the model on a dataset
-    def run_eval(self,
-                path,
-                loss = None):
+    def run_eval(self, path):
         dataset = ds.ERDataset(path)
         loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
+        # neg_pos = dataset.data['neg_pos']
+        # neg_weight = 1 / (neg_pos[0] / neg_pos[1] + 1)
+        alpha = [0.25, 0.75]
+        loss = utils.FocalLoss(gamma=2, alpha=alpha, reduction='none')
         print("evaluating model on validation set....")
         Y_hat, Y, l = [], [], 0
         with torch.no_grad():
@@ -219,5 +221,6 @@ class HierMatcher(nn.Module):
         recall = recall_score(Y, Y_hat)
         precision = precision_score(Y, Y_hat)
         f1 = f1_score(Y, Y_hat)
-        print(f"validation:\nrecall: {recall}, precision: {precision}, f1: {f1}, loss: {l / len(loader)}")
-        return recall, precision, f1, l / len(loader)
+        l = l / sum([alpha[i] for i in Y])
+        print(f"validation:\nrecall: {recall}, precision: {precision}, f1: {f1}, loss: {l:.5f}")
+        return recall, precision, f1, l
