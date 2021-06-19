@@ -1,12 +1,12 @@
 import torch
 from torch.utils.data import Dataset
-import Data_preprocessing as dp
+import preprocessing
 
 class ERDataset(Dataset):
     
     def __init__(self, fpath):
         super(ERDataset, self).__init__()
-        data = dp.load_data(fpath)
+        data = preprocessing.load_data(fpath)
         self.data = data
         
     def __len__(self):

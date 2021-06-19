@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from sklearn.metrics import precision_score, recall_score, f1_score
+from sklearn.metrics import precision_score, recall_score, f1_score, accuracy_score
 import Dataset as ds
 import utils
 
@@ -110,7 +110,7 @@ class HierMatcher(nn.Module):
         concat = torch.cat((left, right), dim=1).view(left.shape[0], -1) # shape(batch_size, (nleft + nright) * 768)
         linear1_out = F.relu(self.linear1_entity_matching(concat)) # shape(batch_size, (nleft + nright) * 200)
         linear2_out = self.linear2_entity_matching(linear1_out) # shape(batch_size, 2)
-        return linear2_out
+        return F.log_softmax(linear2_out, dim=1)
     
     # gets left entity embeddings and right entity embeddings
     def get_entity_tokens(self, x):
@@ -154,73 +154,89 @@ class HierMatcher(nn.Module):
     # fits the model to the training data
     def run_train(self, 
                   train, 
-                  validation, 
+                  validation,
+                  best_val_path,
+                  best_train_path=None,
                   num_epochs=40,
-                  batch_size=16,
+                  batch_size=32,
                   lr=0.01,
+                  best_f1=0.0,
                   loss=None,
                   optimizer=None,
                   scheduler=None):
         
-        train_dataset = ds.ERDataset(train)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=ds.ERDataset.collate_fn)
+        dataset = ds.ERDataset(train)
+        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True, collate_fn=ds.ERDataset.collate_fn)
         
         if(optimizer == None):
             optimizer = torch.optim.Adam(self.parameters(), lr=lr)
         if(scheduler == None):
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
         if(loss == None):
-            # neg_pos = train_dataset.data['neg_pos']
-            # neg_weight = 1 / (neg_pos[0] / neg_pos[1] + 1)
-            loss = utils.FocalLoss(gamma=2, alpha=0.25)
-            
-        num_steps = len(train_loader)
-        path = 'best_model.pt'
-        best_f1 = 0.0
+            weight = torch.Tensor(self.get_class_weights(dataset.data['neg_pos']))
+            loss = utils.SoftNLLLoss(0.05, weight)
         
         for epoch in range(num_epochs):
-            for num, data in enumerate(train_loader):
+            Y, Y_hat = [], []
+            for num, data in enumerate(loader):
                 output = self(data)
                 l = loss(output, data['labels'])
                 l.backward()
                 optimizer.step()
                 optimizer.zero_grad()
                 if (num + 1) % 10 == 0:
-                    print(f'epoch: {epoch+1} / {num_epochs}, step: {num+1} / {num_steps}, loss: {l:.5f}')
-            recall, precision, f1, val_loss = self.run_eval(validation)
-            if(f1 >= best_f1):
-                best_f1 = f1
-                checkpoint = {
-                    'epoch': epoch,
-                    'recall': recall,
-                    'precision': precision,
-                    'f1': f1,
-                    'val_loss': val_loss,
-                    'model_state': self.state_dict(),
-                    'optim_state': optimizer.state_dict()
-                }
-                torch.save(checkpoint, path)
+                    print(f'epoch: {epoch+1} / {num_epochs}, step: {num+1} / {len(loader)}, loss: {l:.5f}')
+                Y.extend(data['labels'].tolist())
+                Y_hat.extend(output.detach().argmax(dim=1).view(-1).tolist())
+            train_stats = self.get_stats(Y, Y_hat)
+            self.log_stats(train_stats, "Training")
+            if(best_train_path != None):
+                self.save_model(epoch, train_stats, self.state_dict(), optimizer.state_dict(), best_train_path)
+            val_stats= self.run_eval(validation, "Validation")
+            if(val_stats[3] >= best_f1):
+                best_f1 = val_stats[3]
+                self.save_model(epoch, val_stats, self.state_dict(), optimizer.state_dict(), best_val_path)
             scheduler.step()
             
     # evaluates the model on a dataset
-    def run_eval(self, path):
+    def run_eval(self, path, mode):
         dataset = ds.ERDataset(path)
         loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
-        # neg_pos = dataset.data['neg_pos']
-        # neg_weight = 1 / (neg_pos[0] / neg_pos[1] + 1)
-        alpha = [0.25, 0.75]
-        loss = utils.FocalLoss(gamma=2, alpha=alpha, reduction='none')
         print("evaluating model on validation set....")
-        Y_hat, Y, l = [], [], 0
+        Y_hat, Y = [], [] 
         with torch.no_grad():
             for data in loader:
                 output = self(data)
-                l += loss(output, data['labels']).item()
                 Y_hat.append(torch.argmax(output).item())
                 Y.append(data['labels'].item())
-        recall = recall_score(Y, Y_hat)
-        precision = precision_score(Y, Y_hat)
-        f1 = f1_score(Y, Y_hat)
-        l = l / sum([alpha[i] for i in Y])
-        print(f"validation:\nrecall: {recall}, precision: {precision}, f1: {f1}, loss: {l:.5f}")
-        return recall, precision, f1, l
+        stats = self.get_stats(Y, Y_hat)
+        self.log_stats(stats, mode)
+        return stats
+    
+    def get_stats(self, Y, Y_hat):
+        accuracy = accuracy_score(Y, Y_hat) * 100
+        recall = recall_score(Y, Y_hat) * 100
+        precision = precision_score(Y, Y_hat) * 100
+        f1 = f1_score(Y, Y_hat) * 100
+        return accuracy, recall, precision, f1
+    
+    def get_class_weights(self, neg_pos):
+        pos_neg_ratio = neg_pos[0] / neg_pos[1]
+        pos_weight = 2 * pos_neg_ratio / (1 + pos_neg_ratio)
+        neg_weight = 2 - pos_weight
+        return [neg_weight, pos_weight]
+    
+    def save_model(self, epoch, stats, model_state, optim_state, path):
+        checkpoint = {
+            'epoch': epoch,
+            'accuracy': stats[0],
+            'recall': stats[1],
+            'precision': stats[2],
+            'f1': stats[3],
+            'model_state': model_state,
+            'optim_state': optim_state
+            }
+        torch.save(checkpoint, path)
+        
+    def log_stats(self, stats, type):
+        print(f"{type}:\naccuracy: {stats[0]:.2f} recall: {stats[1]:.2f}, precision: {stats[2]:.2f}, f1: {stats[3]:.2f}")
