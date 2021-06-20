@@ -77,3 +77,17 @@ def plot_grad_flow(named_parameters):
     plt.legend([Line2D([0], [0], color="c", lw=4),
                 Line2D([0], [0], color="b", lw=4),
                 Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
+
+def plot_stats(train_stats, val_stats):
+    fig, (ax1, ax2, ax3, ax4) = plt.subplot(2,2)
+    plot_graph(ax1, train_stats[0], val_stats[0], 'accuracy')
+    plot_graph(ax2, train_stats[1], val_stats[1], 'recall')
+    plot_graph(ax3, train_stats[2], val_stats[2], 'precision')
+    plot_graph(ax4, train_stats[3], val_stats[3], 'f1')
+    
+def plot_graph(ax, train_data, val_data, label):
+    x_axis = np.arange(len(train_data))
+    ax.plot(x_axis, train_data, label='train')
+    ax.plot(x_axis, val_data, label='validation')
+    ax.set_xlabel('epoch')
+    ax.set_ylabel(label)

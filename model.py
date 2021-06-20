@@ -40,8 +40,8 @@ class HierMatcher(nn.Module):
         self.nright = nright # number of attributes in the right entity
         
         # layers in token matching level
-        self.highway_token_matching = HighwayNet(embedding_len) # highway network in token matching level
-        self.linear_token_matching = nn.Linear(embedding_len, 1) # linear layer used in token matching level
+        # self.highway_token_matching = HighwayNet(embedding_len) # highway network in token matching level
+        # self.linear_token_matching = nn.Linear(embedding_len, 1) # linear layer used in token matching level
         
         # layers in attribute matching level
         self.attribute_embeddings_left = nn.Embedding(nleft, embedding_len) # attribute embeddings for left entity in attribute matching level
@@ -76,10 +76,7 @@ class HierMatcher(nn.Module):
     
     # get the token in the right entity that is most similar to left entity token
     def get_max(self, weight_matrix, compare_matrix):
-        max_w, _ =  torch.max(weight_matrix, dim=2, keepdim=True) # shape(batch_size, n_tokens_left, 1)
-        one_hot = weight_matrix == max_w # shape(batch_size, n_tokens_left, n_tokens_right)
-        selection_matrix = weight_matrix * one_hot # shape(batch_size, n_tokens_left, n_tokens_right)
-        selection_matrix = torch.div(selection_matrix, selection_matrix + 1e-7).unsqueeze(3) # shape(batch_size, n_tokens_left, n_tokens_right, 1)
+        selection_matrix = weight_matrix.unsqueeze(3)
         out = torch.mul(compare_matrix, selection_matrix).sum(2)
         return out # shape(batch_size, n_tokens_left, 768)
     
@@ -91,7 +88,7 @@ class HierMatcher(nn.Module):
         return res_matrix
     
     # attribute matching layer
-    def attribute_matching(self, token_embeddings, field_embeddings, compare_result, tokens_mask, attrs_mask):
+    def attribute_matching(self, token_embeddings, field_embeddings, tokens_mask, attrs_mask):
         start, res = 0, []
         for i, v in enumerate(token_embeddings.values()):
             if(v.size(1) == 0):
@@ -100,8 +97,8 @@ class HierMatcher(nn.Module):
             field = field_embeddings(torch.tensor(i)).view(-1,1) # shape(768, 1)
             mask = tokens_mask[:, start:start+v.size(1)].view(-1, v.size(1), 1)
             weights = self.masked_softmax(torch.matmul(v, field), mask, dim=1) # shape(batch_size, n, 1)
-            compare_matrix = compare_result[:, start:start+v.size(1)] # shape(batch_size, n, 768)
-            summary = torch.sum(torch.mul(compare_matrix, weights), 1).view(v.size(0), 1, -1) # shape(batch_size, 1, 768)
+            # compare_matrix = compare_result[:, start:start+v.size(1)] # shape(batch_size, n, 768)
+            summary = torch.sum(torch.mul(v, weights), 1).view(v.size(0), 1, -1) # shape(batch_size, 1, 768)
             start+=v.size(1)
             res.append(summary)
         res = torch.cat(res, dim=1) # shape(batch_size, n_attr, 768)
@@ -113,7 +110,8 @@ class HierMatcher(nn.Module):
         concat = torch.cat((left, right), dim=1).view(left.shape[0], -1) # shape(batch_size, (nleft + nright) * 768)
         linear1_out = F.relu(self.linear1_entity_matching(concat)) # shape(batch_size, (nleft + nright) * 200)
         linear2_out = self.linear2_entity_matching(linear1_out) # shape(batch_size, 2)
-        return F.log_softmax(linear2_out, dim=1)
+        # return F.log_softmax(linear2_out, dim=1)
+        return linear2_out
     
     # gets left entity embeddings and right entity embeddings
     def get_entity_tokens(self, x):
@@ -138,19 +136,19 @@ class HierMatcher(nn.Module):
         
     # compute softmax using a mask
     def masked_softmax(self, tensor, mask, dim=-1):
-        exp = torch.exp(tensor)
-        masked_exp = exp * mask
-        masked_sum = masked_exp.sum(dim, keepdim=True) + 1e-7
-        return masked_exp / masked_sum
+        mask[mask == 0] = -1e10
+        mask[mask == 1] = 0
+        tensor = tensor + mask
+        return torch.softmax(tensor, dim=dim)
     
     def forward(self, x):
-        left_embeddings, right_embeddings = self.get_entity_tokens(x)
+        # left_embeddings, right_embeddings = self.get_entity_tokens(x)
         left_tokens_mask, left_attrs_mask = self.get_mask(x['left_fields'])
         right_tokens_mask, right_attrs_mask = self.get_mask(x['right_fields'])
-        left_compare_matrix = self.token_matching(left_embeddings, right_embeddings, right_tokens_mask)
-        right_compare_matrix = self.token_matching(right_embeddings, left_embeddings, left_tokens_mask)
-        left_attributes_rep = self.attribute_matching(x['left_fields'], self.attribute_embeddings_left, left_compare_matrix, left_tokens_mask, left_attrs_mask)
-        right_attributes_rep = self.attribute_matching(x['right_fields'], self.attribute_embeddings_right, right_compare_matrix, right_tokens_mask, right_attrs_mask)
+        # left_compare_matrix = self.token_matching(left_embeddings, right_embeddings, right_tokens_mask)
+        # right_compare_matrix = self.token_matching(right_embeddings, left_embeddings, left_tokens_mask)
+        left_attributes_rep = self.attribute_matching(x['left_fields'], self.attribute_embeddings_left, left_tokens_mask, left_attrs_mask)
+        right_attributes_rep = self.attribute_matching(x['right_fields'], self.attribute_embeddings_right, right_tokens_mask, right_attrs_mask)
         output = self.entity_matching(left_attributes_rep, right_attributes_rep)
         return output
     
@@ -176,9 +174,10 @@ class HierMatcher(nn.Module):
         if(scheduler == None):
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=5, gamma=0.1)
         if(loss == None):
-            weight = torch.Tensor(self.get_class_weights(dataset.data['neg_pos']))
-            loss = utils.SoftNLLLoss(0.05, weight)
+            weight = self.get_class_weights(dataset.data['neg_pos'])
+            loss = utils.FocalLoss(gamma=2, alpha=weight)
         
+        train_plot_stats, val_plot_stats = [], []
         for epoch in range(num_epochs):
             Y, Y_hat = [], []
             for num, data in enumerate(loader):
@@ -199,7 +198,10 @@ class HierMatcher(nn.Module):
             if(val_stats[3] >= best_f1):
                 best_f1 = val_stats[3]
                 self.save_model(epoch, val_stats, self.state_dict(), optimizer.state_dict(), best_val_path)
+            train_plot_stats.append(train_stats)
+            val_plot_stats.append(val_stats)
             scheduler.step()
+        utils.plot_stats(list(zip(*train_plot_stats)), list(zip(*val_plot_stats)))
             
     # evaluates the model on a dataset
     def run_eval(self, path, mode):
