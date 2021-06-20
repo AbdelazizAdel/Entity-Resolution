@@ -17,7 +17,7 @@ class HighwayNet(nn.Module):
         self.gate_activation = nn.Sigmoid()
         self.normal_layer = nn.Linear(input_size, input_size)
         self.gate_layer = nn.Linear(input_size, input_size)
-        self.gate_layer.bias.data.fill_(gate_bias)
+        nn.init.constant_(self.gate_layer.bias, gate_bias)
 
     def forward(self, x):
         normal_layer_result = self.activation_function(self.normal_layer(x))
@@ -50,8 +50,10 @@ class HierMatcher(nn.Module):
         # layers in entity matching level
         input_size = (nleft + nright) * embedding_len
         output_size = (nleft + nright) * 200
+        pi = torch.tensor(0.01) # used for intializing last linear layer
         self.linear1_entity_matching = nn.Linear(input_size, output_size) # first linear layer in entity matching level
         self.linear2_entity_matching = nn.Linear(output_size, 2) # second linear layer in entity matching level
+        nn.init.constant_(self.linear2_entity_matching.bias, -torch.log((1 - pi) / pi).item())
         
         # used as comparison result of attributes with empty value, learned during training
         empty_attr_res = torch.Tensor(1, self.embedding_len)
@@ -70,15 +72,16 @@ class HierMatcher(nn.Module):
         highway_out = self.highway_token_matching(compare_matrix) # shape(batch_size, n_tokens_left, n_tokens_right, 768)
         tokens_mask = tokens_mask.view(tokens_mask.size(0), 1, -1, 1)
         weight_vector = self.masked_softmax(self.linear_token_matching(highway_out), tokens_mask, dim=2)
-        return weight_vector # shape(batch_size, n_tokens_left, n_tokens_right, 1)
+        return weight_vector.squeeze(3) # shape(batch_size, n_tokens_left, n_tokens_right)
     
     # get the token in the right entity that is most similar to left entity token
     def get_max(self, weight_matrix, compare_matrix):
-        size = weight_matrix.shape
-        dim1 = torch.arange(size[0]).view(-1,1)
-        dim2 = torch.arange(size[1])
-        dim3 = torch.argmax(weight_matrix, dim=2).squeeze()
-        return compare_matrix[dim1, dim2, dim3, :] # shape(batch_size, n_tokens_left, 768)
+        max_w, _ =  torch.max(weight_matrix, dim=2, keepdim=True) # shape(batch_size, n_tokens_left, 1)
+        one_hot = weight_matrix == max_w # shape(batch_size, n_tokens_left, n_tokens_right)
+        selection_matrix = weight_matrix * one_hot # shape(batch_size, n_tokens_left, n_tokens_right)
+        selection_matrix = torch.div(selection_matrix, selection_matrix + 1e-7).unsqueeze(3) # shape(batch_size, n_tokens_left, n_tokens_right, 1)
+        out = torch.mul(compare_matrix, selection_matrix).sum(2)
+        return out # shape(batch_size, n_tokens_left, 768)
     
     # token matching layer
     def token_matching(self, left_embeddings, right_embeddings, tokens_mask):
@@ -202,7 +205,7 @@ class HierMatcher(nn.Module):
     def run_eval(self, path, mode):
         dataset = ds.ERDataset(path)
         loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
-        print("evaluating model on validation set....")
+        print(f"evaluating model on {mode} set....")
         Y_hat, Y = [], [] 
         with torch.no_grad():
             for data in loader:

@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+import numpy as np
 
 class FocalLoss(nn.Module):
     
@@ -25,27 +28,6 @@ class FocalLoss(nn.Module):
     
     
 class SoftNLLLoss(nn.NLLLoss):
-    """A soft version of negative log likelihood loss with support for label smoothing.
-    Effectively equivalent to PyTorch's :class:`torch.nn.NLLLoss`, if `label_smoothing`
-    set to zero. While the numerical loss values will be different compared to
-    :class:`torch.nn.NLLLoss`, this loss results in the same gradients. This is because
-    the implementation uses :class:`torch.nn.KLDivLoss` to support multi-class label
-    smoothing.
-    Args:
-        label_smoothing (float):
-            The smoothing parameter :math:`epsilon` for label smoothing. For details on
-            label smoothing refer `this paper <https://arxiv.org/abs/1512.00567v1>`__.
-        weight (:class:`torch.Tensor`):
-            A 1D tensor of size equal to the number of classes. Specifies the manual
-            weight rescaling applied to each class. Useful in cases when there is severe
-            class imbalance in the training set.
-        num_classes (int):
-            The number of classes.
-        size_average (bool):
-            By default, the losses are averaged for each minibatch over observations **as
-            well as** over dimensions. However, if ``False`` the losses are instead
-            summed. This is a keyword only parameter.
-    """
 
     def __init__(self, label_smoothing=0, weight=None, num_classes=2, **kwargs):
         super(SoftNLLLoss, self).__init__(**kwargs)
@@ -55,7 +37,7 @@ class SoftNLLLoss(nn.NLLLoss):
 
         assert label_smoothing >= 0.0 and label_smoothing <= 1.0
 
-        self.criterion = nn.KLDivLoss(**kwargs)
+        self.criterion = nn.KLDivLoss(**kwargs, reduction='batchmean')
 
     def forward(self, input, target):
         one_hot = torch.zeros_like(input)
@@ -66,4 +48,32 @@ class SoftNLLLoss(nn.NLLLoss):
             one_hot.mul_(self.weight)
 
         return self.criterion(input, one_hot)
+    
 
+def plot_grad_flow(named_parameters):
+    '''Plots the gradients flowing through different layers in the net during training.
+    Can be used for checking for possible gradient vanishing / exploding problems.
+    
+    Usage: Plug this function in Trainer class after loss.backwards() as 
+    "plot_grad_flow(self.model.named_parameters())" to visualize the gradient flow'''
+    ave_grads = []
+    max_grads= []
+    layers = []
+    for n, p in named_parameters:
+        if(p.requires_grad) and ("bias" not in n):          
+            layers.append(n)
+            ave_grads.append(p.grad.abs().mean())
+            max_grads.append(p.grad.abs().max())
+    plt.bar(np.arange(len(max_grads)), max_grads, alpha=0.1, lw=1, color="c")
+    plt.bar(np.arange(len(max_grads)), ave_grads, alpha=0.1, lw=1, color="b")
+    plt.hlines(0, 0, len(ave_grads)+1, lw=2, color="k" )
+    plt.xticks(range(0,len(ave_grads), 1), layers, rotation="vertical")
+    plt.xlim(left=0, right=len(ave_grads))
+    plt.ylim(bottom = -0.001, top=0.02) # zoom in on the lower gradient regions
+    plt.xlabel("Layers")
+    plt.ylabel("average gradient")
+    plt.title("Gradient flow")
+    plt.grid(True)
+    plt.legend([Line2D([0], [0], color="c", lw=4),
+                Line2D([0], [0], color="b", lw=4),
+                Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])

@@ -20,7 +20,7 @@ if(os.path.exists(best_val_path)):
     model.load_state_dict(checkpoint['model_state'])
     optimizer = optim.Adam(model.parameters())
     optimizer.load_state_dict(checkpoint['optim_state'])
-    
+        
 model.run_train(train_path,
                 valid_path,
                 best_val_path,
@@ -30,3 +30,6 @@ model.run_train(train_path,
                 num_epochs=15,
                 batch_size=32,
                 lr=0.01)
+
+
+#TODO: use oversampling to increase positive class using random replication or mixDA from Ditto
