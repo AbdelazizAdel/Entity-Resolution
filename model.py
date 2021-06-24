@@ -94,11 +94,12 @@ class HierMatcher(nn.Module):
     # attribute matching layer
     def attribute_matching(self, token_embeddings, field_embeddings, compare_result, tokens_mask, attrs_mask):
         start, res = 0, []
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         for i, v in enumerate(token_embeddings):
             if(v.size(1) == 0):
                 res.append(torch.zeros(v.size(0), 1, 2 * self.hidden_size))
                 continue
-            field = field_embeddings(torch.tensor(i)).view(-1,1) # shape(2 * hidden_size, 1)
+            field = field_embeddings(torch.tensor(i).to(device)).view(-1,1) # shape(2 * hidden_size, 1)
             mask = tokens_mask[:, start:start+v.size(1)].view(-1, v.size(1), 1)
             weights = self.masked_softmax(torch.matmul(v, field), mask, dim=1) # shape(batch_size, n, 1)
             compare_matrix = compare_result[:, start:start+v.size(1)] # shape(batch_size, n, 2 * hidden_size)
@@ -210,7 +211,7 @@ class HierMatcher(nn.Module):
     # evaluates the model on a dataset
     def run_eval(self, path, mode):
         dataset = ds.ERDataset(path)
-        loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
+        loader = DataLoader(dataset, shuffle=False, batch_size=32, collate_fn=ds.ERDataset.collate_fn)
         print(f"evaluating model on {mode} set....")
         Y_hat, Y = [], []
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -218,8 +219,8 @@ class HierMatcher(nn.Module):
             for data in loader:
                 self.set_device(data, device)
                 output = self(data)
-                Y_hat.append(torch.argmax(output).item())
-                Y.append(data['labels'].item())
+                Y.extend(data['labels'].tolist())
+                Y_hat.extend(output.argmax(dim=1).view(-1).tolist())
         stats = self.get_stats(Y, Y_hat)
         self.log_stats(stats, mode)
         return stats
@@ -273,6 +274,6 @@ class HierMatcher(nn.Module):
     
     def set_device(self, x, device):
         for key in ['left_fields', 'right_fields']:
-            for v in x[key].values():
-                v.to(device)
-        x['labels'].to(device)
+            for k,v in x[key].items():
+                x[key][k] = v.to(device)
+        x['labels'] = x['labels'].to(device)
