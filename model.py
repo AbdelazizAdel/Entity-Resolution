@@ -179,10 +179,12 @@ class HierMatcher(nn.Module):
             weight = self.get_class_weights(dataset.data['neg_pos'])
             # loss = utils.FocalLoss(gamma=2, alpha=weight)
             loss = utils.SoftNLLLoss(0.05, torch.tensor(weight))
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         train_plot_stats, val_plot_stats = [], []
         for epoch in range(num_epochs):
             Y, Y_hat = [], []
             for num, data in enumerate(loader):
+                self.set_device(data, device)
                 output = self(data)
                 l = loss(output, data['labels'])
                 l.backward()
@@ -210,9 +212,11 @@ class HierMatcher(nn.Module):
         dataset = ds.ERDataset(path)
         loader = DataLoader(dataset, shuffle=False, collate_fn=ds.ERDataset.collate_fn)
         print(f"evaluating model on {mode} set....")
-        Y_hat, Y = [], [] 
+        Y_hat, Y = [], []
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         with torch.no_grad():
             for data in loader:
+                self.set_device(data, device)
                 output = self(data)
                 Y_hat.append(torch.argmax(output).item())
                 Y.append(data['labels'].item())
@@ -266,3 +270,9 @@ class HierMatcher(nn.Module):
     def filter_by_name(self, x):
         skip = ['attribute_embeddings', 'empty_attr']
         return sum([a in x for a in skip]) == 0
+    
+    def set_device(self, x, device):
+        for key in ['left_fields', 'right_fields']:
+            for v in x[key].values():
+                v.to(device)
+        x['labels'].to(device)

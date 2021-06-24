@@ -12,7 +12,8 @@ best_train_path = 'data/walmart_amazon/train_best_model.pt'
 
 best_f1 = 0.0
 optimizer = None
-model = md.HierMatcher(5, 5)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model = md.HierMatcher(5, 5).to(device)
 
 if(os.path.exists(best_val_path)):
     checkpoint = torch.load(best_val_path)
@@ -30,3 +31,5 @@ model.run_train(train_path,
                 num_epochs=15,
                 batch_size=32,
                 lr=1e-3)
+
+# TODO: remove stopwords from data as the current sentences contain stopwords
