@@ -97,7 +97,7 @@ class HierMatcher(nn.Module):
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         for i, v in enumerate(token_embeddings):
             if(v.size(1) == 0):
-                res.append(torch.zeros(v.size(0), 1, 2 * self.hidden_size))
+                res.append(torch.zeros(v.size(0), 1, 2 * self.hidden_size).to(device))
                 continue
             field = field_embeddings(torch.tensor(i).to(device)).view(-1,1) # shape(2 * hidden_size, 1)
             mask = tokens_mask[:, start:start+v.size(1)].view(-1, v.size(1), 1)
@@ -120,7 +120,11 @@ class HierMatcher(nn.Module):
     # gets the output of the rnn
     def get_rnn_output(self, x):
         res = []
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         for v in x.values():
+            if(v.size(1) == 0):
+                res.append(torch.zeros(v.size(0), 0, 2 * self.hidden_size).to(device))
+                continue
             rnn_out, _ = self.bi_gru(v)
             res.append(rnn_out)
         return res
