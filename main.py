@@ -12,7 +12,7 @@ best_train_path = 'data/walmart_amazon/train_best_model.pt'
 
 best_f1 = 0.0
 optimizer = None
-model = md.HierMatcher(5, 5, embedding_len=768)
+model = md.HierMatcher(5, 5)
 
 if(os.path.exists(best_val_path)):
     checkpoint = torch.load(best_val_path)
@@ -29,7 +29,4 @@ model.run_train(train_path,
                 optimizer=optimizer,
                 num_epochs=15,
                 batch_size=32,
-                lr=0.01)
-
-
-#TODO: use oversampling to increase positive class using random replication or mixDA from Ditto
+                lr=1e-3)

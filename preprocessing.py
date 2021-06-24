@@ -2,7 +2,15 @@ import os
 import csv
 import torch 
 from transformers import BertTokenizer, BertModel
+import nlpaug.augmenter.word as naw
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import nltk
 
+# nltk.download('stopwords')
+# nltk.download('averaged_perceptron_tagger')
+# nltk.download('wordnet')
+# nltk.download('punkt')
 model_name = 'bert-base-uncased'
 tokenizer = BertTokenizer.from_pretrained(model_name)
 bert = BertModel.from_pretrained(model_name)
@@ -18,7 +26,7 @@ output:
     labels: list of int, the labels of the data, either 0 or 1
     fields: list of attribute names
 '''
-def get_data(fpath, nleft):
+def get_data(fpath, nleft, da=False):
     with open(fpath) as csv_file:
         file = csv.reader(csv_file)
         data, labels, fields = [], [], []
@@ -28,9 +36,19 @@ def get_data(fpath, nleft):
                 fields = row[2:]
                 continue
             label = int(row[1])
+            entry = (row[2:(2+nleft)], row[(2+nleft):])
+            # if(da and label == 1):
+            #     labels.extend([1, 1, 1, 1])
+            #     neg_pos[label]+=4
+            #     aug_left = augment_entity(entry[0])
+            #     aug_right = augment_entity(entry[1])
+            #     aug_entities = list(zip(aug_left, aug_right))
+            #     entry_2 = (entry[1], entry[0])
+            #     data.extend([entry, entry_2, aug_entities[0], aug_entities[1]])
+            # else:
             labels.append(label)
             neg_pos[label]+=1
-            data.append((row[2:(2+nleft)], row[(2+nleft):]))
+            data.append(entry)
     return data, labels, fields, neg_pos
 
 '''
@@ -49,6 +67,8 @@ def encode_data(data, fields, nleft):
     left_fields = {k:[] for k in fields[:nleft]}
     right_fields = {k:[] for k in fields[nleft:]}
     for i, (left, right) in enumerate(data):
+        left = [remove_stopwords(x) for x in left]
+        right = [remove_stopwords(x) for x in  right]
         left_spans = {k:len(tokenizer.tokenize(v)) for k,v in zip(fields[:nleft], left)}
         right_spans = {k:len(tokenizer.tokenize(v)) for k,v in zip(fields[nleft:], right)}
         tokenized_seq = tokenizer(' '.join(left), ' '.join(right), max_length=256, truncation=True, return_tensors='pt')
@@ -84,3 +104,15 @@ def load_data(fpath):
         data = torch.load(fpath)
         return data
     raise Exception(f"{fpath} not found")
+    
+def remove_stopwords(text):
+    text_tokens = word_tokenize(text)
+    tokens_without_sw = [word for word in text_tokens if not word in stopwords.words()]
+    return ' '.join(tokens_without_sw)
+
+def augment_entity(entity):
+    aug1 = naw.ContextualWordEmbsAug(model_path='bert-base-uncased', action="substitute")
+    aug2 = naw.SynonymAug(aug_src='wordnet')
+    entity1 = [aug1.augment(x) for x in entity]
+    entity2 = [aug2.augment(x) for x in entity]
+    return entity1, entity2
