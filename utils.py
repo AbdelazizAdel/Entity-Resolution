@@ -11,16 +11,17 @@ class FocalLoss(nn.Module):
         super(FocalLoss, self).__init__()
         self.gamma = gamma
         self.alpha = alpha
-        if isinstance(alpha, float): self.alpha = torch.Tensor([alpha,1-alpha])
-        if isinstance(alpha, list): self.alpha = torch.Tensor(alpha)
         self.reduction = reduction
-
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if isinstance(alpha, float): self.alpha = torch.Tensor([alpha,1-alpha]).to(self.device)
+        if isinstance(alpha, list): self.alpha = torch.Tensor(alpha).to(self.device)
+        
     def forward(self, input, target):
         ce = F.cross_entropy(input, target, reduction='none', weight=self.alpha)
         pt = F.softmax(input, dim=1)[range(len(target)), target]
         fl = ((1 - pt) ** self.gamma) * ce
         if(self.reduction == 'mean'):
-            w = torch.tensor([self.alpha[i] for i in target])
+            w = torch.tensor([self.alpha[i] for i in target]).to(self.device)
             return fl.sum() / w.sum()
         if(self.reduction == 'sum'):
             return fl.sum()
