@@ -42,7 +42,7 @@ class HierMatcher(nn.Module):
         self.nright = nright # number of attributes in the right entity
         
         # layers in token matching level
-        self.bi_gru = nn.GRU(embedding_len, hidden_size, 1, batch_first=True, bidirectional  = True)
+        self.bi_gru = nn.GRU(embedding_len, hidden_size, 3, batch_first=True, bidirectional  = True)
         self.highway_token_matching = HighwayNet(2 * hidden_size) # highway network in token matching level
         self.linear_token_matching = nn.Linear(2 * hidden_size, 1) # linear layer used in token matching level
         

@@ -72,7 +72,7 @@ def encode_data(data, fields, nleft):
         left_spans = {k:len(tokenizer.tokenize(v)) for k,v in zip(fields[:nleft], left)}
         right_spans = {k:len(tokenizer.tokenize(v)) for k,v in zip(fields[nleft:], right)}
         tokenized_seq = tokenizer(' '.join(left), ' '.join(right), max_length=256, truncation=True, return_tensors='pt')
-        encoded_seq = bert(**tokenized_seq).last_hidden_state.squeeze().numpy()
+        encoded_seq = get_bert_output(bert(**tokenized_seq, output_hidden_states=True).hidden_states).squeeze(0).numpy()
         start = 1
         for field, span in left_spans.items():
             left_fields[field].append(encoded_seq[start:start+span])
@@ -116,3 +116,8 @@ def augment_entity(entity):
     entity1 = [aug1.augment(x) for x in entity]
     entity2 = [aug2.augment(x) for x in entity]
     return entity1, entity2
+
+def get_bert_output(x):
+    return sum([a * 0.25 for a in x[-4:]])
+
+preprocess('data/walmart_amazon/', 5)
