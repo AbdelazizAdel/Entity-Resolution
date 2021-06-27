@@ -3,12 +3,12 @@ import model as md
 import torch
 import os
 
-train_path = 'data/walmart_amazon/train.csv'
-valid_path = 'data/walmart_amazon/valid.csv'
-test_path = 'data/walmart_amazon/test.csv'
+train_path = 'data/amazon_google/train.csv'
+valid_path = 'data/amazon_google/valid.csv'
+test_path = 'data/amazon_google/test.csv'
 
-best_val_path = 'data/walmart_amazon/best_model.pt'
-best_train_path = 'data/walmart_amazon/train_best_model.pt'
+best_val_path = 'data/amazon_google/best_model.pt'
+best_train_path = 'data/amazon_google/train_best_model.pt'
 
 best_f1 = 0.0
 optimizer = None
@@ -31,5 +31,3 @@ model.run_train(train_path,
                 num_epochs=15,
                 batch_size=32,
                 lr=1e-3)
-
-# TODO: remove stopwords from data as the current sentences contain stopwords

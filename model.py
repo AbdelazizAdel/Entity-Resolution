@@ -50,8 +50,12 @@ class HierMatcher(nn.Module):
         self.attribute_embeddings_left = nn.Embedding(nleft, 2 * hidden_size) # attribute embeddings for left entity in attribute matching level
         self.attribute_embeddings_right = nn.Embedding(nright, 2 * hidden_size) # attribute embeddings for right entity in attribute matching level
         
+        # entity summarization parameters
+        self.summarize_left = nn.linear(embedding_len, 2 * hidden_size)
+        self.summarize_right = nn.linear(embedding_len, 2 * hidden_size)
+        
         # layers in entity matching level
-        input_size = (nleft + nright) * 2 * hidden_size
+        input_size = 2 * 2 * hidden_size
         pi = torch.tensor(0.01) # used for intializing last linear layer
         self.highway_entity_matching = HighwayNet(input_size) # highway network in entity matching level
         self.linear_entity_matching = nn.Linear(input_size, 2) # linear layer in entity matching level
@@ -109,6 +113,9 @@ class HierMatcher(nn.Module):
         res = torch.cat(res, dim=1) # shape(batch_size, n_attr, 2 * hidden_size)
         res[~attrs_mask, :] = self.empty_attr_res.view(-1)
         return res
+    
+    def entity_summarization(self, attr_rep, input_summary):
+        pass
     
     # entity matching layer
     def entity_matching(self, left, right):

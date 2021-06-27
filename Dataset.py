@@ -16,6 +16,7 @@ class ERDataset(Dataset):
         example = {
             'left_fields': {k: v[idx] for k,v in self.data['left_fields'].items()},
             'right_fields': {k: v[idx] for k,v in self.data['right_fields'].items()},
+            'summary': self.data['summary'][idx],
             'labels': self.data['labels'][idx]
         }
         return example
@@ -27,6 +28,7 @@ class ERDataset(Dataset):
                 'right_fields': {},
                 'left_length': [],
                 'right_length': [],
+                'summary': [],
                 'labels': []
               }
         
@@ -42,6 +44,7 @@ class ERDataset(Dataset):
                     else:
                         right.append(v.shape[0])
             res['labels'].append(example['labels'])
+            res['summary'].append(torch.from_numpy(example['summary']).view(1, -1))
             res['left_length'].append(left)
             res['right_length'].append(right)
             
@@ -52,4 +55,5 @@ class ERDataset(Dataset):
         res['labels'] = torch.tensor(res['labels'])
         res['left_length'] = torch.tensor(res['left_length'])
         res['right_length'] = torch.tensor(res['right_length'])
+        res['summary'] = torch.cat(res['summary'], dim=0)
         return res
