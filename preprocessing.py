@@ -66,6 +66,7 @@ output:
 def encode_data(data, fields, nleft):
     left_fields = {k:[] for k in fields[:nleft]}
     right_fields = {k:[] for k in fields[nleft:]}
+    summary = []
     for i, (left, right) in enumerate(data):
         left = [remove_stopwords(x) for x in left]
         right = [remove_stopwords(x) for x in  right]
@@ -73,7 +74,7 @@ def encode_data(data, fields, nleft):
         right_spans = {k:len(tokenizer.tokenize(v)) for k,v in zip(fields[nleft:], right)}
         tokenized_seq = tokenizer(' '.join(left), ' '.join(right), max_length=256, truncation=True, return_tensors='pt')
         out = bert(**tokenized_seq, output_hidden_states=True)
-        summary = out.last_hidden_state.squeeze(0).numpy()[0]
+        cls_token = out.last_hidden_state.squeeze(0)[0]
         encoded_seq = get_bert_output(out.hidden_states).squeeze(0).numpy()
         # encoded_seq = bert(**tokenized_seq).last_hidden_state.squeeze(0).numpy()
         start = 1
@@ -84,6 +85,7 @@ def encode_data(data, fields, nleft):
         for field, span in right_spans.items():
             right_fields[field].append(encoded_seq[start:start+span])
             start+=span
+        summary.append(cls_token)
         if((i + 1) % 100 == 0):
             print(f"example {i + 1}/{len(data)}")
     return {'left_fields': left_fields, 'right_fields': right_fields, 'summary': summary}

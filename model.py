@@ -51,8 +51,8 @@ class HierMatcher(nn.Module):
         self.attribute_embeddings_right = nn.Embedding(nright, 2 * hidden_size) # attribute embeddings for right entity in attribute matching level
         
         # entity summarization parameters
-        self.summarize_left = nn.linear(embedding_len, 2 * hidden_size)
-        self.summarize_right = nn.linear(embedding_len, 2 * hidden_size)
+        self.summarize_left = nn.Linear(embedding_len, 2 * hidden_size)
+        self.summarize_right = nn.Linear(embedding_len, 2 * hidden_size)
         
         # layers in entity matching level
         input_size = 2 * 2 * hidden_size
