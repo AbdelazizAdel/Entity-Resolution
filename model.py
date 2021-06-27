@@ -114,13 +114,18 @@ class HierMatcher(nn.Module):
         res[~attrs_mask, :] = self.empty_attr_res.view(-1)
         return res
     
-    def entity_summarization(self, attr_rep, input_summary):
-        pass
-    
+    def entity_summarization(self, attrs_rep, input_summary):
+        left = self.summarize_left(input_summary).unsqueeze(1) # shape(batch_size, 1, 2 * hidden_size)
+        right = self.summarize_right(input_summary).unsqueeze(1) # shape(batch_size, 1, 2 * hidden_size)
+        left_weights = F.softmax(torch.sum(torch.mul(attrs_rep[:, 0:self.nleft, :], left), dim=2), dim=1).unsqueeze(2) # shape(batch_size, n_attr)
+        right_weights = F.softmax(torch.sum(torch.mul(attrs_rep[:, self.nleft:, :], right), dim=2), dim=1).unsqueeze(2) # shape(batch_size, n_attr)
+        left_summary = torch.sum(torch.mul(attrs_rep[:, 0:self.nleft, :], left_weights), dim=1) # shape(batch_size, 2 * hidden_size)
+        right_summary = torch.sum(torch.mul(attrs_rep[:, self.nleft:, :], right_weights), dim=1) # shape(batch_size, 2 * hidden_size)
+        return torch.cat([left_summary, right_summary], dim=1) # shape(batch_size, 2 * 2 * hidden_size)
+        
     # entity matching layer
-    def entity_matching(self, left, right):
-        concat = torch.cat((left, right), dim=1).view(left.shape[0], -1) # shape(batch_size, (nleft + nright) * 2 * hidden_size)
-        highway_out = self.highway_entity_matching(concat) # shape(batch_size, (nleft + nright) * 2 * hidden_size)
+    def entity_matching(self, summary):
+        highway_out = self.highway_entity_matching(summary) # shape(batch_size, 2 * 2 * hidden_size)
         linear_out = self.linear_entity_matching(highway_out) # shape(batch_size, 2)
         return F.log_softmax(linear_out, dim=1)
     
@@ -162,7 +167,8 @@ class HierMatcher(nn.Module):
         right_compare_matrix = self.token_matching(right_embeddings, left_embeddings, left_tokens_mask)
         left_attributes_rep = self.attribute_matching(left_embeddings, self.attribute_embeddings_left, left_compare_matrix, left_tokens_mask, left_attrs_mask)
         right_attributes_rep = self.attribute_matching(right_embeddings, self.attribute_embeddings_right, right_compare_matrix, right_tokens_mask, right_attrs_mask)
-        output = self.entity_matching(left_attributes_rep, right_attributes_rep)
+        summary = self.entity_summarization(torch.cat([left_attributes_rep, right_attributes_rep], dim=1), x['summary'])
+        output = self.entity_matching(summary)
         return output
     
     # fits the model to the training data
